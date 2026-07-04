@@ -231,9 +231,6 @@ def taxsim_input_definition(data_dict, year, state_name):
     output_lines = []
     mappings = load_variable_mappings()["taxsim_input_definition"]
 
-    # Header lines using year from input data
-    current_year = data_dict.get("year", year)
-
     output_lines.extend(["   Input Data:"])
 
     # Configuration for formatting
@@ -370,7 +367,7 @@ def export_household(taxsim_input, policyengine_situation, logs, disable_salt):
 def simulate(simulation, variable, year):
     try:
         return to_roundedup_number(simulation.calculate(variable, period=year))
-    except Exception as error:
+    except Exception:
         return 0.00
 
 
@@ -380,6 +377,6 @@ def simulate_multiple(simulation, variables, year):
             to_roundedup_number(simulation.calculate(variable, period=year))
             for variable in variables
         )
-    except Exception as error:
+    except Exception:
         total = 0.00
     return to_roundedup_number(total)
