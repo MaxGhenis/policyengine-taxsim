@@ -1146,23 +1146,40 @@ class PolicyEngineRunner(BaseTaxRunner):
             sim, chunk_df, rebate_free_sim_factory, zero_salt=zero_salt
         )
 
+    @staticmethod
+    def _override(sim, variable_name, value, period):
+        """Pin ``variable_name`` with set_input and record it in
+        ``sim.taxsim_overrides``.
+
+        ``Simulation.input_variables`` is computed once, when the simulation
+        is built, so it omits values set afterwards. The record lets
+        ``_compute_marginal_rates`` hold these overrides fixed in its
+        perturbed branch instead of recomputing them from formulas.
+        """
+        sim.set_input(variable_name=variable_name, value=value, period=period)
+        sim.taxsim_overrides.add(variable_name)
+
     def _build_configured_sim(
         self, dataset, chunk_df: pd.DataFrame, zero_salt: bool = False
     ):
         """Build a Microsimulation from the chunk dataset and apply all
         emulator overrides (SALT, QBID W-2 wages, rental QBID gate, MN CRP,
-        imputed-transfer zeroing, MD local tax zeroing).
+        imputed-transfer zeroing, MD local tax zeroing, ME rent utilities,
+        NY separate payments). Every override goes through ``_override``,
+        which records it in ``sim.taxsim_overrides``.
 
         ``zero_salt`` zeroes the federal deduction for state and local income
         or sales tax for every record in the chunk: state-0 records and
         --disable-salt runs."""
         sim = Microsimulation(dataset=dataset)
+        sim.taxsim_overrides = set()
 
         if zero_salt:
             years = sorted(set(chunk_df["year"].unique()))
             for year in years:
                 year_mask = chunk_df["year"] == year
-                sim.set_input(
+                self._override(
+                    sim,
                     variable_name=_SALT_VARIABLE,
                     value=np.zeros(int(year_mask.sum())),
                     period=str(
@@ -1176,7 +1193,8 @@ class PolicyEngineRunner(BaseTaxRunner):
             ).count
             years = sorted(set(chunk_df["year"].unique()))
             for year in years:
-                sim.set_input(
+                self._override(
+                    sim,
                     variable_name="w2_wages_from_qualified_business",
                     value=np.full(n_persons, 1e9),
                     period=str(
@@ -1203,7 +1221,8 @@ class PolicyEngineRunner(BaseTaxRunner):
             ).count
             years = sorted(set(chunk_df["year"].unique()))
             for year in years:
-                sim.set_input(
+                self._override(
+                    sim,
                     variable_name="rental_income_would_be_qualified",
                     value=np.zeros(n_persons, dtype=bool),
                     period=str(
@@ -1229,7 +1248,8 @@ class PolicyEngineRunner(BaseTaxRunner):
                         # qualifying_crp is on TaxUnit; vector aligns
                         # with the chunk's tax-unit order, one row per
                         # tax unit.
-                        sim.set_input(
+                        self._override(
+                            sim,
                             variable_name="mn_renters_credit_qualifying_crp",
                             value=mn_mask[chunk_df["year"] == year].values,
                             period=str(
@@ -1256,7 +1276,8 @@ class PolicyEngineRunner(BaseTaxRunner):
                 continue
             n_entities = sim.get_variable_population(var).count
             for year in years:
-                sim.set_input(
+                self._override(
+                    sim,
                     variable_name=var,
                     value=np.zeros(n_entities),
                     period=str(
@@ -1293,7 +1314,8 @@ class PolicyEngineRunner(BaseTaxRunner):
             if var in sim.tax_benefit_system.variables:
                 n_md = sim.get_variable_population(var).count
                 for year in years:
-                    sim.set_input(
+                    self._override(
+                        sim,
                         variable_name=var,
                         value=np.zeros(n_md),
                         period=str(
@@ -1318,7 +1340,8 @@ class PolicyEngineRunner(BaseTaxRunner):
                 for year in years:
                     year_mask = chunk_df["year"] == year
                     if (me_mask & year_mask).any():
-                        sim.set_input(
+                        self._override(
+                            sim,
                             variable_name=var,
                             value=me_mask[year_mask].values,
                             period=str(
@@ -1337,7 +1360,8 @@ class PolicyEngineRunner(BaseTaxRunner):
                     continue
                 n_entities = sim.get_variable_population(var).count
                 for year in years:
-                    sim.set_input(
+                    self._override(
+                        sim,
                         variable_name=var,
                         value=np.zeros(n_entities),
                         period=str(
@@ -1352,14 +1376,16 @@ class PolicyEngineRunner(BaseTaxRunner):
     def _zero_one_time_rebates(self, sim, chunk_df: pd.DataFrame) -> None:
         """Force the one-time state rebate variables to zero. These are
         formula variables, so they must be pinned with set_input before any
-        calculate on the sim (same mechanism as the transfer zeroing)."""
+        calculate on the sim (same mechanism as the transfer zeroing).
+        ``sim`` must come from ``_build_configured_sim``."""
         years = sorted(set(chunk_df["year"].unique()))
         for var in ONE_TIME_REBATE_VARIABLES:
             if var not in sim.tax_benefit_system.variables:
                 continue
             n_entities = sim.get_variable_population(var).count
             for year in years:
-                sim.set_input(
+                self._override(
+                    sim,
                     variable_name=var,
                     value=np.zeros(n_entities),
                     period=str(
@@ -1546,13 +1572,15 @@ class PolicyEngineRunner(BaseTaxRunner):
         - Perturbs employment_income (wages) only, not self-employment
         - Splits perturbation between primary and spouse proportionally
           to their share of total wages (weighted average earnings)
-        - Uses $0.01 delta to match TAXSIM batch mode
+        - Uses a $100 delta (TAXSIM uses $0.01; PE computes in float32)
         - Returns rates as percentages (22.0 for 22%)
 
-        ``keep`` names set_input overrides the perturbed branch must share
-        with ``sim``. They are not in ``sim.input_variables`` (fixed when the
-        sim was built), so the branch would otherwise drop and recompute
-        them.
+        The perturbed branch holds every input fixed: the dataset's
+        (``sim.input_variables``) and the emulator's set_input overrides
+        (``sim.taxsim_overrides``, see ``_override``). Everything else is
+        recomputed from the perturbed wages, so the rates are the finite
+        difference of fiitax and siitax.
+        ``keep`` names further variables to hold fixed.
 
         Returns:
             dict with 'frate', 'srate' arrays at tax_unit level
@@ -1602,11 +1630,17 @@ class PolicyEngineRunner(BaseTaxRunner):
         # Create branch simulation with perturbed wages
         branch = sim.get_branch("mtr_wage_perturbation")
 
-        # Clear cached values for variables that depend on employment_income
+        # Clear cached values for variables that depend on employment_income.
+        # sim.input_variables was fixed when the sim was built, so it omits
+        # the overrides set_input applied afterwards; keep those too, or the
+        # branch would recompute them (e.g. adding back the MD county tax).
+        fixed = (
+            set(sim.input_variables)
+            | getattr(sim, "taxsim_overrides", set())
+            | set(keep)
+        )
         for variable in sim.tax_benefit_system.variables:
-            if variable in keep:
-                continue
-            if variable not in sim.input_variables or variable == "employment_income":
+            if variable not in fixed or variable == "employment_income":
                 branch.delete_arrays(variable)
 
         # Set perturbed employment income
