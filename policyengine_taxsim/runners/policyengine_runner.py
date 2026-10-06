@@ -1842,8 +1842,12 @@ class PolicyEngineRunner(BaseTaxRunner):
                     )
                     columns["v22"] = np.round(np.minimum(ctc_arr, limiting_tax), 2)
 
-            # Compute marginal rates if any idtl level requests them
-            mtr_vars = {"frate", "srate"}
+            # Compute marginal rates if any idtl level requests them. This
+            # must be an ordered sequence, not a set: iterating it appends
+            # the output columns, and set order for strings changes with
+            # each process's PYTHONHASHSEED. TAXSIM's header order is
+            # frate, srate.
+            mtr_vars = ("frate", "srate")
             needs_mtr = any(v in vars_to_compute for v in mtr_vars)
             if needs_mtr:
                 try:
