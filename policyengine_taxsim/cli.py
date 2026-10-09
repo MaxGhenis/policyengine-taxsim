@@ -13,12 +13,16 @@ from io import StringIO
 # Suppress benign Hugging Face Hub warnings (e.g., "unauthenticated requests"
 # rate-limit notices) — downloads still succeed under the anonymous limit,
 # and the message confuses TAXSIM users who don't have an HF account.
+# huggingface_hub sets its logger's level once, when its logging module is
+# first imported; policyengine-us imports it later, so import it here first.
+try:
+    import huggingface_hub.utils.logging  # noqa: F401
+except ImportError:  # not installed, so nothing to quiet
+    pass
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
 
 try:
-    from .runners.policyengine_runner import PolicyEngineRunner
     from .runners.taxsim_runner import TaxsimRunner, default_taxsim_executable
-    from .runners.stitched_runner import StitchedRunner
     from .comparison.comparator import TaxComparator, ComparisonConfig
     from .comparison.statistics import ComparisonStatistics
     from .core.yaml_generator import generate_pe_tests_yaml
@@ -27,13 +31,12 @@ try:
     from .core.io import read_input, write_output
     from .core.scorp import validate_scorp_treatment
     from .core import provenance as prov
+    from .core.lazy import lazy_attributes
 except ImportError:
-    from policyengine_taxsim.runners.policyengine_runner import PolicyEngineRunner
     from policyengine_taxsim.runners.taxsim_runner import (
         TaxsimRunner,
         default_taxsim_executable,
     )
-    from policyengine_taxsim.runners.stitched_runner import StitchedRunner
     from policyengine_taxsim.comparison.comparator import (
         TaxComparator,
         ComparisonConfig,
@@ -48,6 +51,37 @@ except ImportError:
     from policyengine_taxsim.core.io import read_input, write_output
     from policyengine_taxsim.core.scorp import validate_scorp_treatment
     from policyengine_taxsim.core import provenance as prov
+    from policyengine_taxsim.core.lazy import lazy_attributes
+
+
+# PolicyEngineRunner and StitchedRunner import policyengine-us, which takes
+# about 20 seconds, so this module loads them on first access or in
+# _import_runners: --help, --version and argument errors found before a
+# command reads its input return without them.
+# A test that fakes a runner patches it on this module, as
+# policyengine_taxsim.cli.StitchedRunner; the first access keeps whatever the
+# defining module holds at that moment.
+_RUNNERS = {
+    "PolicyEngineRunner": "policyengine_taxsim.runners.policyengine_runner",
+    "StitchedRunner": "policyengine_taxsim.runners.stitched_runner",
+}
+__getattr__, __dir__ = lazy_attributes(globals(), _RUNNERS)
+
+
+def _import_runners():
+    """Bind the runners as globals of this module, which the commands read
+    by bare name. Each command calls this after the option checks that don't
+    need its input and before it reads its input, even taxsim and
+    sample-data, which don't use the runners: importing policyengine-us also
+    changes process-wide state, such as installing a filter that ignores
+    every warning (policyengine_us/model_api.py), and command runs keep that
+    state. A runner already bound, such as a test's fake, is kept."""
+    global PolicyEngineRunner, StitchedRunner
+    namespace = globals()
+    if "PolicyEngineRunner" not in namespace:
+        PolicyEngineRunner = __getattr__("PolicyEngineRunner")
+    if "StitchedRunner" not in namespace:
+        StitchedRunner = __getattr__("StitchedRunner")
 
 
 def _scorp_option(fn):
@@ -405,6 +439,7 @@ def cli(ctx, logs, disable_salt, sample, scorp_treatment, provenance):
     if provenance:
         _refuse_data_file_as_sidecar(provenance, _default_binary())
 
+    _import_runners()
     hashing_stdout = None
     try:
         if provenance:
@@ -513,6 +548,7 @@ def policyengine(
     provenance = _resolve_provenance(provenance)
     if provenance:
         _refuse_data_file_as_sidecar(provenance, input_file, output, _default_binary())
+    _import_runners()
     try:
         # Read input file
         df = read_input(input_file)
@@ -581,6 +617,7 @@ def taxsim(input_file, output, sample, taxsim_path, provenance):
         _refuse_data_file_as_sidecar(
             provenance, input_file, output, taxsim_path or _default_binary()
         )
+    _import_runners()
     try:
         # Load and optionally sample data
         df = read_input(input_file)
@@ -696,6 +733,7 @@ def compare(
     provenance = _resolve_provenance(provenance)
     if provenance:
         _refuse_data_file_as_sidecar(provenance, input_file, _default_binary())
+    _import_runners()
     try:
         # Load and optionally sample data
         df = read_input(input_file)
@@ -836,6 +874,7 @@ def compare(
 )
 def sample_data(input_file, sample, output):
     """Sample records from a large dataset"""
+    _import_runners()
     try:
         df = read_input(input_file)
 
