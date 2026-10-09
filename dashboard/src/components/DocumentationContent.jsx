@@ -139,8 +139,8 @@ import delimited using "output.raw", delimiter(",") clear`,
         id: 'python-pin',
         label: 'Pin policyengine-us version (optional)',
         language: 'cli',
-        code: `# For reproducible results, pin the underlying tax model version
-uv pip install policyengine-us==1.555.0`
+        code: `# For reproducible results, pin the underlying tax model version (Python 3.11 or later)
+uv pip install policyengine-us==2.25.2`
       },
       {
         id: 'python-cli-advanced',
@@ -175,14 +175,14 @@ devtools::install_github(
         id: 'r-version-pin',
         label: 'Pin version & check versions',
         language: 'r',
-        code: `# Pin policyengine-us to a specific version for reproducible results
-setup_policyengine(force = TRUE, policyengine_us_version = "1.555.0")
+        code: `# Pin policyengine-us to a specific version for reproducible results (needs Python 3.11 or later)
+setup_policyengine(force = TRUE, policyengine_us_version = "2.25.2")
 
 # Check installed package versions
 policyengine_versions()
-#> policyengine-taxsim: 2.8.0
-#> policyengine-us:     1.555.0
-#> policyengine-core:   3.30.2`
+#> policyengine-taxsim: 3.0.1
+#> policyengine-us:     2.25.2
+#> policyengine-core:   3.32.21`
       }
     ],
   };
@@ -545,7 +545,7 @@ policyengine_versions()
               {renderCodeBlock({
                 id: 'version-pin',
                 label: 'Terminal',
-                code: '# Install a specific version of policyengine-taxsim\nuv tool install policyengine-taxsim==2.13.0\n\n# Pin the underlying tax model for reproducible results\nuv tool install policyengine-taxsim --with policyengine-us==1.555.0',
+                code: '# Install a specific version of policyengine-taxsim\nuv tool install policyengine-taxsim==3.0.1\n\n# Pin the underlying tax model for reproducible results (Python 3.11 or later)\nuv tool install --python 3.11 policyengine-taxsim==3.0.1 --with policyengine-us==2.25.2',
               })}
               <p className="text-gray-500 mb-4 mt-4 text-[15px] leading-relaxed">
                 To see which versions you have, run <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">policyengine-taxsim --version</code>. To record them with a run, add <code className="bg-gray-100 px-1.5 py-0.5 rounded text-xs">--provenance run.json</code>: the output is unchanged, and the JSON file records the policyengine-taxsim, policyengine-us and policyengine-core versions, the build of the TAXSIM binary that computes years before 2021, the options, and SHA-256 hashes of the input and output. PyPI does not keep every policyengine-us release, so keep this file with your results.
